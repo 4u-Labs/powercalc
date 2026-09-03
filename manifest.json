@@ -2,7 +2,7 @@
   "name": "PowerCalc",
   "short_name": "PowerCalc",
   "description": "Calculadora multifuncional premium com layouts integrados de cálculo científico, finanças, conversão de unidades/moedas, estatística, programador e engenharia.",
-  "start_url": "./app.html",
+  "start_url": "./app.php",
   "display": "standalone",
   "background_color": "#030508",
   "theme_color": "#030508",
