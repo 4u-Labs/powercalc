@@ -2618,3 +2618,40 @@ body.light-theme .logo-text span span {
 
 
 
+
+/* --- CENTRAL PWA BUTTON (EXACT POSITION) --- */
+.header-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pwa-install-btn {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 5px;
+    background: rgba(0, 210, 255, 0.12);
+    border: 1.5px solid #00d2ff;
+    color: #00d2ff;
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 0 10px rgba(0, 210, 255, 0.25);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.pwa-install-btn:hover {
+    background: rgba(0, 210, 255, 0.28);
+    color: #ffffff;
+    box-shadow: 0 0 18px rgba(0, 210, 255, 0.55);
+    transform: translateY(-1px);
+}
+
+.pwa-install-btn:active {
+    transform: translateY(0);
+}
