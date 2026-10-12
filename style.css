@@ -2655,3 +2655,7 @@ body.light-theme .logo-text span span {
 .pwa-install-btn:active {
     transform: translateY(0);
 }
+
+:is(button,a,input,select,[tabindex]):focus-visible{outline:3px solid #fbbf24;outline-offset:3px;}
+[hidden]{display:none!important;}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}

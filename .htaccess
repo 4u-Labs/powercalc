@@ -1,0 +1,4 @@
+Options -Indexes
+<FilesMatch "(?i)(\.keystore$|\.jks$|\.idsig$)">
+Require all denied
+</FilesMatch>

@@ -3,13 +3,13 @@ header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
 header("Cache-Control: post-check=0, pre-check=0", false);
 header("Pragma: no-cache");
 header("Expires: Mon, 26 Jul 1997 05:00:00 GMT");
-$v = time();
+$v = '2.1.0';
 ?>
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PowerCalc</title>
     <link rel="stylesheet" href="style.css?v=<?php echo $v; ?>">
     <link rel="manifest" href="manifest.json">
@@ -2325,7 +2325,7 @@ $v = time();
                     </select>
                 </div>
                 <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; margin-bottom: 16px; font-size: 0.7rem; color: var(--text-secondary); line-height: 1.5; text-align: left; box-shadow: var(--shadow-inset);">
-                    • Versão: 1.0.1 (Manifest V3)<br>
+                    • Versão: 2.1.0<br>
                     • Desenvolvido por: 4uLabs<br>
                     • Plataforma: <a href="https://4u.ia.br" target="_blank" style="color: var(--accent-color); text-decoration: none; font-weight: 600;">4u.ia.br</a>
                 </div>
@@ -2350,7 +2350,7 @@ $v = time();
                 <span>📲</span>
                 <span>Instalar PowerCalc</span>
             </div>
-            <p class="pwa-modal-text">Instale o PowerCalc no seu dispositivo para ter acesso instantâneo e funcionamento 100% offline.</p>
+            <p class="pwa-modal-text">Instale o PowerCalc no seu dispositivo para ter acesso instantâneo e cálculos locais disponíveis offline após a instalação. Cotações e recursos de IA precisam de conexão.</p>
             <div class="pwa-modal-steps">
                 <div><b>No iPhone/iPad (Safari):</b> Toque no botão de <b>Compartilhar</b> (quadrado com seta) ➔ selecione <b>"Adicionar à Tela de Início"</b>.</div>
                 <div><b>No Android / Chrome:</b> Toque no menu de 3 pontos ➔ <b>"Instalar aplicativo"</b>.</div>
@@ -2359,6 +2359,7 @@ $v = time();
         </div>
     </div>
 
+    <script src="reliability.js?v=2.1.0"></script>
     <script src="app.js?v=<?php echo $v; ?>"></script>
     <script>
         if ('serviceWorker' in navigator) {
@@ -2369,5 +2370,6 @@ $v = time();
             });
         }
     </script>
+<script src="usability.js?v=2.1.0"></script>
 </body>
 </html>

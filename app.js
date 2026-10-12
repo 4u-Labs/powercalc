@@ -7,7 +7,7 @@ if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
                     const res = {};
                     const keyArray = Array.isArray(keys) ? keys : [keys];
                     keyArray.forEach(k => {
-                        const val = localStorage.getItem(k);
+                        const val = PowerCalcSafeStorage.getItem(k);
                         if (val !== null) {
                             try { res[k] = JSON.parse(val); }
                             catch(e) { res[k] = val; }
@@ -17,7 +17,7 @@ if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
                 },
                 set: (data, cb) => {
                     for (const k in data) {
-                        localStorage.setItem(k, typeof data[k] === 'object' ? JSON.stringify(data[k]) : data[k]);
+                        PowerCalcSafeStorage.setItem(k, typeof data[k] === 'object' ? JSON.stringify(data[k]) : data[k]);
                     }
                     if (cb) setTimeout(cb, 1);
                 }
@@ -27,6 +27,7 @@ if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    const readField=el=>PowerCalcReliability.readField(el,numberFormat);
     // === ESTADOS DO APLICATIVO ===
     let formula = '';
     let scientificMemory = 0;
@@ -110,13 +111,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 setTheme('dark');
             }
 
-            if (result.exchangeRates) {
-                currentRates = result.exchangeRates;
-            }
+            if(result.exchangeRates){try{currentRates=PowerCalcReliability.validateRates(result.exchangeRates,Object.keys(defaultRates));}catch(error){currentRates={...defaultRates};}}
 
-            if (result.calcHistory) {
-                calcHistory = result.calcHistory;
-            }
+            if(result.calcHistory){try{calcHistory=PowerCalcReliability.validateHistory(result.calcHistory);}catch(error){calcHistory=[];}}
 
             if (result.scientificMemory !== undefined) {
                 scientificMemory = result.scientificMemory;
@@ -431,8 +428,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (logoLink) {
         logoLink.addEventListener('click', (e) => {
             const now = Date.now();
-            let clicks = parseInt(localStorage.getItem('logo_clicks') || '0');
-            let lastClick = parseInt(localStorage.getItem('logo_last_click') || '0');
+            let clicks = parseInt(PowerCalcSafeStorage.getItem('logo_clicks') || '0');
+            let lastClick = parseInt(PowerCalcSafeStorage.getItem('logo_last_click') || '0');
 
             if (now - lastClick < 2000) {
                 clicks++;
@@ -440,13 +437,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 clicks = 1;
             }
 
-            localStorage.setItem('logo_clicks', clicks);
-            localStorage.setItem('logo_last_click', now);
+            PowerCalcSafeStorage.setItem('logo_clicks', clicks);
+            PowerCalcSafeStorage.setItem('logo_last_click', now);
 
             if (clicks >= 5) {
                 e.preventDefault();
-                localStorage.removeItem('logo_clicks');
-                localStorage.removeItem('logo_last_click');
+                PowerCalcSafeStorage.removeItem('logo_clicks');
+                PowerCalcSafeStorage.removeItem('logo_last_click');
                 if (configModal) configModal.classList.add('show');
             }
         });
@@ -461,7 +458,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (lastItem && lastItem.formula === expr) return;
 
         calcHistory.unshift({ formula: expr, result: res });
-        calcHistory = calcHistory.slice(0, 10); // Limita aos 10 mais recentes
+        calcHistory = calcHistory.slice(0, 100); // Limita aos 10 mais recentes
 
         if (chrome && chrome.storage && chrome.storage.local) {
             chrome.storage.local.set({ calcHistory });
@@ -469,6 +466,8 @@ document.addEventListener('DOMContentLoaded', () => {
         renderHistory();
     }
 
+    window.addEventListener('powercalc-export-history',()=>{const blob=new Blob([JSON.stringify({version:1,history:calcHistory},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download='powercalc-historico.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+    window.addEventListener('powercalc-import-history',event=>{try{calcHistory=PowerCalcReliability.validateHistory(event.detail.history);chrome.storage.local.set({calcHistory});renderHistory();window.dispatchEvent(new CustomEvent('powercalc-history-result',{detail:'Histórico importado.'}));}catch(error){window.dispatchEvent(new CustomEvent('powercalc-history-result',{detail:'Arquivo de histórico inválido. O histórico atual foi preservado.'}));}});
     function renderHistory() {
         if (!historyDropdown) return;
         historyDropdown.innerHTML = '';
@@ -487,6 +486,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const el = document.createElement('div');
             el.className = 'history-item';
             el.innerText = `${formatFormula(item.formula)} = ${item.result}`;
+            el.tabIndex=0;el.setAttribute("role","button");el.addEventListener("keydown",event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();el.click();}});
             el.addEventListener('click', (e) => {
                 e.stopPropagation();
                 formula = item.formula;
@@ -1209,7 +1209,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const cat = unitCategory.value;
         const from = unitFrom.value;
         const to = unitTo.value;
-        const val = parseFloat(unitInputVal.value);
+        const val = readField(unitInputVal);
 
         if (isNaN(val)) {
             unitOutputVal.value = '';
@@ -1268,7 +1268,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!syncText) return;
 
         if (!timestamp) {
-            syncText.innerText = 'Cotações Offline';
+            syncText.innerText = 'Taxas ilustrativas — atualize antes de usar';
+            syncText.dataset.lastKnown=syncText.innerText;
             return;
         }
 
@@ -1278,7 +1279,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const hours = String(date.getHours()).padStart(2, '0');
         const minutes = String(date.getMinutes()).padStart(2, '0');
         
-        syncText.innerText = `Atualizado: ${day}/${month} às ${hours}:${minutes}`;
+        syncText.innerText = `Coinbase · ${day}/${month}/${date.getFullYear()} às ${hours}:${minutes}`;
+        syncText.dataset.lastKnown=syncText.innerText;
     }
 
     function updateCurrencyConversion() {
@@ -1286,15 +1288,15 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const from = currencyFrom.value;
         const to = currencyTo.value;
-        const val = parseFloat(currencyInputVal.value);
+        const val = readField(currencyInputVal);
         const rateText = document.getElementById('currencyRateText');
         const inverseText = document.getElementById('currencyInverseText');
 
-        const spread = currencySpread ? parseFloat(currencySpread.value) || 0 : 0;
-        const iof = currencyIof ? parseFloat(currencyIof.value) || 0 : 0;
-        const fee = currencyFee ? parseFloat(currencyFee.value) || 0 : 0;
+        const spread = currencySpread ? (currencySpread.value.trim()===''?0:readField(currencySpread)) : 0;
+        const iof = currencyIof ? (currencyIof.value.trim()===''?0:readField(currencyIof)) : 0;
+        const fee = currencyFee ? (currencyFee.value.trim()===''?0:readField(currencyFee)) : 0;
 
-        if (isNaN(val)) {
+        if(!Number.isFinite(val)||![spread,iof,fee].every(Number.isFinite)||spread<0||spread>100||iof<0||iof>100||fee<0){
             currencyOutputVal.value = '';
             updateMultiCurrencyGrid(NaN);
             return;
@@ -1370,9 +1372,9 @@ document.addEventListener('DOMContentLoaded', () => {
             targets = ['USD', 'BRL', 'EUR', 'BTC'];
         }
 
-        const spread = currencySpread ? parseFloat(currencySpread.value) || 0 : 0;
-        const iof = currencyIof ? parseFloat(currencyIof.value) || 0 : 0;
-        const fee = currencyFee ? parseFloat(currencyFee.value) || 0 : 0;
+        const spread = currencySpread ? (currencySpread.value.trim()===''?0:readField(currencySpread)) : 0;
+        const iof = currencyIof ? (currencyIof.value.trim()===''?0:readField(currencyIof)) : 0;
+        const fee = currencyFee ? (currencyFee.value.trim()===''?0:readField(currencyFee)) : 0;
 
         targets.forEach(to => {
             const rateTo = currentRates[to] || defaultRates[to];
@@ -1429,39 +1431,18 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    let syncingRates=false;
     async function syncRates() {
-        if (!btnSyncRates) return;
-        btnSyncRates.innerText = '⌛...';
-        try {
-            const res = await fetch('https://api.coinbase.com/v2/exchange-rates?currency=USD');
-            if (!res.ok) throw new Error('Falha na API Coinbase');
-            const data = await res.json();
-            
-            if (data && data.data && data.data.rates) {
-                const apiRates = data.data.rates;
-                Object.keys(currentRates).forEach(cur => {
-                    if (apiRates[cur]) {
-                        currentRates[cur] = parseFloat(apiRates[cur]);
-                    }
-                });
-
-                if (chrome && chrome.storage && chrome.storage.local) {
-                    chrome.storage.local.set({ 
-                        exchangeRates: currentRates,
-                        lastRatesSync: Date.now()
-                    });
-                }
-
-                updateSyncTimeDisplay(Date.now());
-                setTimeout(updateCurrencyConversion, 800);
-            }
-        } catch (e) {
-            console.error('Falha de sincronização:', e);
-            const syncText = document.getElementById('currencyLastSyncText');
-            if (syncText) syncText.innerText = 'Erro ao atualizar. Usando offline.';
-        } finally {
-            btnSyncRates.innerText = '🔄 Atualizar';
-        }
+        if(!btnSyncRates||syncingRates)return;syncingRates=true;btnSyncRates.disabled=true;btnSyncRates.innerText='Atualizando…';
+        const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),12000);
+        try{
+            const res=await fetch('https://api.coinbase.com/v2/exchange-rates?currency=USD',{signal:controller.signal,cache:'no-store'});
+            if(!res.ok)throw new Error('Falha na consulta');const data=await res.json();
+            currentRates=PowerCalcReliability.validateRates(data?.data?.rates,Object.keys(defaultRates));
+            const timestamp=Date.now();chrome.storage.local.set({exchangeRates:currentRates,lastRatesSync:timestamp});
+            updateSyncTimeDisplay(timestamp);updateCurrencyConversion();
+        }catch(error){const text=document.getElementById('currencyLastSyncText');if(text)text.innerText='Falha ao atualizar. '+text.dataset.lastKnown;}
+        finally{clearTimeout(timer);syncingRates=false;btnSyncRates.disabled=false;btnSyncRates.innerText='🔄 Atualizar';}
     }
 
     if (btnSyncRates) btnSyncRates.addEventListener('click', syncRates);
@@ -2059,8 +2040,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const resultEl = document.getElementById('pctDirectResult');
         if (!valEl || !baseEl || !resultEl) return;
 
-        const val = parseFloat(valEl.value);
-        const base = parseFloat(baseEl.value);
+        const val = readField(valEl);
+        const base = readField(baseEl);
 
         if (isNaN(val) || isNaN(base)) {
             if (card) card.style.display = 'none';
@@ -2082,8 +2063,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const resultEl = document.getElementById('pctRatioResult');
         if (!partEl || !wholeEl || !resultEl) return;
 
-        const part = parseFloat(partEl.value);
-        const whole = parseFloat(wholeEl.value);
+        const part = readField(partEl);
+        const whole = readField(wholeEl);
 
         if (isNaN(part) || isNaN(whole)) {
             if (card) card.style.display = 'none';
@@ -2111,8 +2092,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const resultEl = document.getElementById('pctDiffResult');
         if (!startEl || !endEl || !resultEl) return;
 
-        const start = parseFloat(startEl.value);
-        const end = parseFloat(endEl.value);
+        const start = readField(startEl);
+        const end = readField(endEl);
 
         if (isNaN(start) || isNaN(end)) {
             if (card) card.style.display = 'none';
@@ -2144,8 +2125,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const resultEl = document.getElementById('pctChangeResult');
         if (!baseEl || !pctEl || !opEl || !resultEl) return;
 
-        const base = parseFloat(baseEl.value);
-        const pct = parseFloat(pctEl.value);
+        const base = readField(baseEl);
+        const pct = readField(pctEl);
         const op = opEl.value;
 
         if (isNaN(base) || isNaN(pct)) {
@@ -2176,8 +2157,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const resultEl = document.getElementById('pctOriginalResult');
         if (!finalEl || !pctEl || !opEl || !resultEl) return;
 
-        const finalVal = parseFloat(finalEl.value);
-        const pct = parseFloat(pctEl.value);
+        const finalVal = readField(finalEl);
+        const pct = readField(pctEl);
         const op = opEl.value;
 
         if (isNaN(finalVal) || isNaN(pct)) {
@@ -2213,9 +2194,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const typeEl = document.getElementById('pctThreeType');
         if (!threeA || !threeB || !threeC || !threeX || !typeEl) return;
 
-        const a = parseFloat(threeA.value);
-        const b = parseFloat(threeB.value);
-        const c = parseFloat(threeC.value);
+        const a = readField(threeA);
+        const b = readField(threeB);
+        const c = readField(threeC);
         const isInverse = typeEl.value === 'inverse';
 
         if (isNaN(a) || isNaN(b) || isNaN(c)) {
@@ -2346,9 +2327,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const totalEl = document.getElementById('finSimpleTotalVal');
         if (!capEl || !rateEl || !timeEl) return;
 
-        const cap = parseFloat(capEl.value);
-        const rate = parseFloat(rateEl.value);
-        const time = parseFloat(timeEl.value);
+        const cap = readField(capEl);
+        const rate = readField(rateEl);
+        const time = readField(timeEl);
 
         if (isNaN(cap) || isNaN(rate) || isNaN(time)) {
             if (jurosEl) jurosEl.innerText = formatCurrency(0);
@@ -2378,9 +2359,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const totalEl = document.getElementById('finCompoundTotalVal');
         if (!capEl || !rateEl || !timeEl) return;
 
-        const cap = parseFloat(capEl.value);
-        const rate = parseFloat(rateEl.value);
-        const time = parseFloat(timeEl.value);
+        const cap = readField(capEl);
+        const rate = readField(rateEl);
+        const time = readField(timeEl);
 
         if (isNaN(cap) || isNaN(rate) || isNaN(time)) {
             if (jurosEl) jurosEl.innerText = formatCurrency(0);
@@ -2415,10 +2396,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!capEl || !monthlyEl || !rateEl || !rateTypeEl || !timeEl || !timeTypeEl) return;
 
-        const cap = parseFloat(capEl.value) || 0;
-        const monthly = parseFloat(monthlyEl.value) || 0;
-        const rate = parseFloat(rateEl.value) || 0;
-        const time = parseFloat(timeEl.value) || 0;
+        const cap = readField(capEl) || 0;
+        const monthly = readField(monthlyEl) || 0;
+        const rate = readField(rateEl) || 0;
+        const time = readField(timeEl) || 0;
 
         const tMeses = timeTypeEl.value === 'years' ? time * 12 : time;
 
@@ -2470,9 +2451,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!valEl || !rateEl || !timeEl) return;
 
-        const pv = parseFloat(valEl.value);
-        const rate = parseFloat(rateEl.value);
-        const n = parseFloat(timeEl.value);
+        const pv = readField(valEl);
+        const rate = readField(rateEl);
+        const n = readField(timeEl);
 
         if (isNaN(pv) || isNaN(rate) || isNaN(n) || n <= 0) {
             const zero = formatCurrency(0);
@@ -2533,10 +2514,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!incomeEl || !capitalEl || !monthlyEl || !rateEl) return;
 
-        const income = parseFloat(incomeEl.value) || 0;
-        const cap = parseFloat(capitalEl.value) || 0;
-        const monthly = parseFloat(monthlyEl.value) || 0;
-        const rateYearly = parseFloat(rateEl.value) || 0;
+        const income = readField(incomeEl) || 0;
+        const cap = readField(capitalEl) || 0;
+        const monthly = readField(monthlyEl) || 0;
+        const rateYearly = readField(rateEl) || 0;
 
         const rateMonthly = Math.pow(1 + rateYearly / 100, 1 / 12) - 1;
 
@@ -2592,7 +2573,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!valEl || !typeEl || !resultTextEl) return;
 
-        const rate = parseFloat(valEl.value);
+        const rate = readField(valEl);
         if (isNaN(rate)) {
             resultTextEl.innerText = '-';
             return;
@@ -2627,8 +2608,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!baseEl || !pctEl || !opEl || !valEl || !diffEl) return;
 
-        const base = parseFloat(baseEl.value);
-        const pct = parseFloat(pctEl.value);
+        const base = readField(baseEl);
+        const pct = readField(pctEl);
         const op = opEl.value;
 
         if (isNaN(base) || isNaN(pct)) {
@@ -3252,8 +3233,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function calculateIMC() {
         if (!healthWeight || !healthHeight) return;
-        const weight = parseFloat(healthWeight.value);
-        const height = parseFloat(healthHeight.value);
+        const weight = readField(healthWeight);
+        const height = readField(healthHeight);
         const card = document.getElementById('imcResultCard');
         const valueEl = document.getElementById('imcValue');
         const statusEl = document.getElementById('imcStatus');
@@ -3429,7 +3410,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const row = [];
             for (let j = 0; j < dim; j++) {
                 const el = document.getElementById(`${gridId}-${i}-${j}`);
-                const val = el ? parseFloat(el.value) : 0;
+                const val = el ? readField(el) : 0;
                 row.push(isNaN(val) ? 0 : val);
             }
             matrix.push(row);
@@ -3811,7 +3792,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const matA = getMatrixValues('grid-matrix-a');
         const matB = getMatrixValues('grid-matrix-b');
         const paramEl = document.getElementById('matrixParamVal');
-        const paramVal = paramEl ? parseFloat(paramEl.value) : 2;
+        const paramVal = paramEl ? readField(paramEl) : 2;
         
         const card = document.getElementById('matrixResultCard');
         const labelEl = document.getElementById('matrixResultLabel');
@@ -4176,11 +4157,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function calculateTMB() {
         if (!healthWeight || !healthHeight || !healthAge || !healthGender || !healthActivity) return;
         
-        const weight = parseFloat(healthWeight.value);
-        const height = parseFloat(healthHeight.value);
-        const age = parseFloat(healthAge.value);
+        const weight = readField(healthWeight);
+        const height = readField(healthHeight);
+        const age = readField(healthAge);
         const gender = healthGender.value;
-        const activity = parseFloat(healthActivity.value);
+        const activity = readField(healthActivity);
         
         const card = document.getElementById('tmbResultCard');
         const tmbValEl = document.getElementById('tmbValue');
@@ -4233,8 +4214,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function calculateBP() {
         if (!healthBpSystolic || !healthBpDiastolic) return;
-        const sys = parseFloat(healthBpSystolic.value);
-        const dia = parseFloat(healthBpDiastolic.value);
+        const sys = readField(healthBpSystolic);
+        const dia = readField(healthBpDiastolic);
         const card = document.getElementById('bpResultCard');
         const valueEl = document.getElementById('bpValue');
         const statusEl = document.getElementById('bpStatus');
@@ -4312,8 +4293,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function calculateHR() {
         if (!healthHrAge || !healthHrResting) return;
-        const age = parseFloat(healthHrAge.value);
-        const rest = parseFloat(healthHrResting.value);
+        const age = readField(healthHrAge);
+        const rest = readField(healthHrResting);
         const card = document.getElementById('hrResultCard');
 
         if (isNaN(age) || isNaN(rest) || age <= 0 || rest <= 0) {
@@ -4359,9 +4340,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function calculateRatio() {
         if (!healthWaist || !healthHip || !healthRatioGender || !healthHeight) return;
-        const waist = parseFloat(healthWaist.value);
-        const hip = parseFloat(healthHip.value);
-        const height = parseFloat(healthHeight.value);
+        const waist = readField(healthWaist);
+        const hip = readField(healthHip);
+        const height = readField(healthHeight);
         const gender = healthRatioGender.value;
         const card = document.getElementById('ratioResultCard');
 
@@ -4466,8 +4447,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function calculateWater() {
         if (!healthWeight || !healthWaterExercise || !healthWaterClimate) return;
-        const weight = parseFloat(healthWeight.value);
-        const exercise = parseFloat(healthWaterExercise.value);
+        const weight = readField(healthWeight);
+        const exercise = readField(healthWaterExercise);
         const climate = healthWaterClimate.value;
         const card = document.getElementById('waterResultCard');
 
@@ -4816,46 +4797,46 @@ document.addEventListener('DOMContentLoaded', () => {
         const fmtTwoDec = new Intl.NumberFormat(locale, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
         if (val === 'mgkg') {
-            const dose = parseFloat(document.getElementById('medDoseMgkg').value);
-            const peso = parseFloat(document.getElementById('medWeightMgkg').value);
+            const dose = readField(document.getElementById('medDoseMgkg'));
+            const peso = readField(document.getElementById('medWeightMgkg'));
             labelText = 'Dose Calculada';
             if (!isNaN(dose) && !isNaN(peso) && peso > 0) {
                 resultText = `${fmtTwoDec.format(dose * peso)} mg`;
             }
         } else if (val === 'bsa') {
-            const dose = parseFloat(document.getElementById('medDoseBsa').value);
-            const bsa = parseFloat(document.getElementById('medBsaVal').value);
+            const dose = readField(document.getElementById('medDoseBsa'));
+            const bsa = readField(document.getElementById('medBsaVal'));
             labelText = 'Dose Calculada';
             if (!isNaN(dose) && !isNaN(bsa) && bsa > 0) {
                 resultText = `${fmtTwoDec.format(dose * bsa)} mg`;
             }
         } else if (val === 'mgml') {
-            const doseMg = parseFloat(document.getElementById('medDoseMg').value);
-            const conc = parseFloat(document.getElementById('medConc').value);
+            const doseMg = readField(document.getElementById('medDoseMg'));
+            const conc = readField(document.getElementById('medConc'));
             labelText = 'Volume a Administrar';
             if (!isNaN(doseMg) && !isNaN(conc) && conc > 0) {
                 resultText = `${fmtTwoDec.format(doseMg / conc)} mL`;
             }
         } else if (val === 'gota') {
-            const vol = parseFloat(document.getElementById('medGotaVol').value);
-            const time = parseFloat(document.getElementById('medGotaTime').value);
-            const equipo = parseFloat(document.getElementById('medGotaEquipo').value);
+            const vol = readField(document.getElementById('medGotaVol'));
+            const time = readField(document.getElementById('medGotaTime'));
+            const equipo = readField(document.getElementById('medGotaEquipo'));
             labelText = 'Velocidade de Gotejamento';
             if (!isNaN(vol) && !isNaN(time) && time > 0) {
                 const gtsMin = (vol * equipo) / time;
                 resultText = `${fmtTwoDec.format(gtsMin)} gts/min`;
             }
         } else if (val === 'infusao') {
-            const vol = parseFloat(document.getElementById('medInfVol').value);
-            const time = parseFloat(document.getElementById('medInfTime').value);
+            const vol = readField(document.getElementById('medInfVol'));
+            const time = readField(document.getElementById('medInfTime'));
             labelText = 'Taxa de Infusão';
             if (!isNaN(vol) && !isNaN(time) && time > 0) {
                 resultText = `${fmtTwoDec.format(vol / time)} mL/h`;
             }
         } else if (val === 'bomba') {
-            const dose = parseFloat(document.getElementById('medBombaDose').value);
-            const peso = parseFloat(document.getElementById('medBombaPeso').value);
-            const conc = parseFloat(document.getElementById('medBombaConc').value);
+            const dose = readField(document.getElementById('medBombaDose'));
+            const peso = readField(document.getElementById('medBombaPeso'));
+            const conc = readField(document.getElementById('medBombaConc'));
             labelText = 'Velocidade da Bomba';
             if (!isNaN(dose) && !isNaN(peso) && !isNaN(conc) && conc > 0) {
                 const rate = (dose * peso * 60) / conc;
@@ -4895,7 +4876,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const fmtTwoDec = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 2 });
 
         if (val === 'ideal') {
-            const h = parseFloat(document.getElementById('bodyHeight').value);
+            const h = readField(document.getElementById('bodyHeight'));
             const gender = document.getElementById('bodyGender').value;
             labelText = 'Peso Ideal (Devine)';
             if (!isNaN(h) && h > 0) {
@@ -4913,8 +4894,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 subText = `Fórmula de Robinson: ${fmtTwoDec.format(robinson)} kg`;
             }
         } else if (val === 'bsa') {
-            const w = parseFloat(document.getElementById('bodyWeight').value);
-            const h = parseFloat(document.getElementById('bodyHeight').value);
+            const w = readField(document.getElementById('bodyWeight'));
+            const h = readField(document.getElementById('bodyHeight'));
             labelText = 'Superfície Corporal BSA';
             if (!isNaN(w) && !isNaN(h) && w > 0 && h > 0) {
                 // Mosteller
@@ -4925,11 +4906,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 subText = `DuBois: ${fmtTwoDec.format(bsaDuBois)} m²`;
             }
         } else if (val === 'fat') {
-            const w = parseFloat(document.getElementById('bodyWeight').value);
-            const h = parseFloat(document.getElementById('bodyHeight').value);
-            const waist = parseFloat(document.getElementById('bodyWaist').value);
-            const neck = parseFloat(document.getElementById('bodyNeck').value);
-            const hip = parseFloat(document.getElementById('bodyHip').value);
+            const w = readField(document.getElementById('bodyWeight'));
+            const h = readField(document.getElementById('bodyHeight'));
+            const waist = readField(document.getElementById('bodyWaist'));
+            const neck = readField(document.getElementById('bodyNeck'));
+            const hip = readField(document.getElementById('bodyHip'));
             const gender = document.getElementById('bodyGender').value;
             labelText = '% Gordura Corporal (Navy)';
 
@@ -5016,8 +4997,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const fmtOneDec = new Intl.NumberFormat(locale, { minimumFractionDigits: 0, maximumFractionDigits: 1 });
 
         if (val === 'pam') {
-            const pas = parseFloat(document.getElementById('cardioPas').value);
-            const pad = parseFloat(document.getElementById('cardioPad').value);
+            const pas = readField(document.getElementById('cardioPas'));
+            const pad = readField(document.getElementById('cardioPad'));
             labelText = 'Pressão Arterial Média (PAM)';
             if (!isNaN(pas) && !isNaN(pad) && pas > 0 && pad > 0) {
                 const pam = (pas + 2 * pad) / 3;
@@ -5061,8 +5042,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 subText = 'Risco de sangramento baixo a moderado.';
             }
         } else if (val === 'qtc') {
-            const qt = parseFloat(document.getElementById('cardioQT').value);
-            const fc = parseFloat(document.getElementById('cardioFC').value);
+            const qt = readField(document.getElementById('cardioQT'));
+            const fc = readField(document.getElementById('cardioFC'));
             const method = document.getElementById('cardioQtcMethod').value;
             labelText = 'QT Corrigido (QTc)';
             if (!isNaN(qt) && !isNaN(fc) && fc > 0 && qt > 0) {
@@ -5117,9 +5098,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const fmtOneDec = new Intl.NumberFormat(locale, { minimumFractionDigits: 0, maximumFractionDigits: 1 });
 
         if (val === 'cg') {
-            const creat = parseFloat(document.getElementById('nefroCreat').value);
-            const age = parseFloat(document.getElementById('nefroAge').value);
-            const w = parseFloat(document.getElementById('nefroWeight').value);
+            const creat = readField(document.getElementById('nefroCreat'));
+            const age = readField(document.getElementById('nefroAge'));
+            const w = readField(document.getElementById('nefroWeight'));
             const gender = document.getElementById('nefroGender').value;
             labelText = 'Clearance de Creatinina (C-G)';
             if (!isNaN(creat) && !isNaN(age) && !isNaN(w) && creat > 0 && age > 0 && w > 0) {
@@ -5132,8 +5113,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 else subText = 'Disfunção grave / falência renal (<30 mL/min)';
             }
         } else if (val === 'egfr') {
-            const creat = parseFloat(document.getElementById('nefroCreat').value);
-            const age = parseFloat(document.getElementById('nefroAge').value);
+            const creat = readField(document.getElementById('nefroCreat'));
+            const age = readField(document.getElementById('nefroAge'));
             const gender = document.getElementById('nefroGender').value;
             labelText = 'eGFR (CKD-EPI 2021)';
             if (!isNaN(creat) && !isNaN(age) && creat > 0 && age > 0) {
@@ -5157,8 +5138,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 else subText = 'G5 — Falência renal (Estágio terminal)';
             }
         } else if (val === 'na-corr') {
-            const na = parseFloat(document.getElementById('nefroNaMedido').value);
-            const gli = parseFloat(document.getElementById('nefroGlicose').value);
+            const na = readField(document.getElementById('nefroNaMedido'));
+            const gli = readField(document.getElementById('nefroGlicose'));
             labelText = 'Sódio Corrigido (Hiperglicemia)';
             if (!isNaN(na) && !isNaN(gli) && na > 0 && gli > 0) {
                 const factor = gli > 400 ? 2.4 : 1.6;
@@ -5167,9 +5148,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 subText = `Correção feita usando fator ${factor} mEq/L por 100mg/dL de glicose`;
             }
         } else if (val === 'osmo') {
-            const na = parseFloat(document.getElementById('nefroOsmoNa').value);
-            const gli = parseFloat(document.getElementById('nefroOsmoGli').value);
-            const ureia = parseFloat(document.getElementById('nefroOsmoUreia').value);
+            const na = readField(document.getElementById('nefroOsmoNa'));
+            const gli = readField(document.getElementById('nefroOsmoGli'));
+            const ureia = readField(document.getElementById('nefroOsmoUreia'));
             labelText = 'Osmolaridade Plasmática';
             if (!isNaN(na) && !isNaN(gli) && !isNaN(ureia) && na > 0) {
                 const osmo = 2 * na + (gli / 18) + (ureia / 6);
@@ -5213,8 +5194,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const fmtOneDec = new Intl.NumberFormat(locale, { minimumFractionDigits: 0, maximumFractionDigits: 1 });
 
         if (val === 'pf') {
-            const pao2 = parseFloat(document.getElementById('respPao2').value);
-            const fio2 = parseFloat(document.getElementById('respFio2').value);
+            const pao2 = readField(document.getElementById('respPao2'));
+            const fio2 = readField(document.getElementById('respFio2'));
             labelText = 'Relação PaO₂ / FiO₂';
             if (!isNaN(pao2) && !isNaN(fio2) && pao2 > 0 && fio2 > 0) {
                 const pf = pao2 / (fio2 / 100);
@@ -5225,9 +5206,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 else subText = 'SDRA Grave (Berlim)';
             }
         } else if (val === 'oi') {
-            const map = parseFloat(document.getElementById('respMap').value);
-            const fio2 = parseFloat(document.getElementById('respFio2Oi').value);
-            const pao2 = parseFloat(document.getElementById('respPao2Oi').value);
+            const map = readField(document.getElementById('respMap'));
+            const fio2 = readField(document.getElementById('respFio2Oi'));
+            const pao2 = readField(document.getElementById('respPao2Oi'));
             labelText = 'Índice de Oxigenação (OI)';
             if (!isNaN(map) && !isNaN(fio2) && !isNaN(pao2) && pao2 > 0) {
                 const oi = (fio2 * map) / pao2;
@@ -5238,8 +5219,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 else subText = 'Disfunção respiratória grave (considere ECMO se >25)';
             }
         } else if (val === 'vm') {
-            const vt = parseFloat(document.getElementById('respVt').value);
-            const fr = parseFloat(document.getElementById('respFr').value);
+            const vt = readField(document.getElementById('respVt'));
+            const fr = readField(document.getElementById('respFr'));
             labelText = 'Ventilação Minuto (VE)';
             if (!isNaN(vt) && !isNaN(fr) && vt > 0 && fr > 0) {
                 const ve = (vt / 1000) * fr;
@@ -5247,7 +5228,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 subText = 'Valor fisiológico em repouso: 5 - 8 L/min';
             }
         } else if (val === 'ibw') {
-            const h = parseFloat(document.getElementById('respHeight').value);
+            const h = readField(document.getElementById('respHeight'));
             const gender = document.getElementById('respGender').value;
             labelText = 'Peso Predito Pulmonar (IBW)';
             if (!isNaN(h) && h > 0) {
@@ -5295,8 +5276,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const fmtOneDec = new Intl.NumberFormat(locale, { minimumFractionDigits: 0, maximumFractionDigits: 1 });
 
         if (val === 'dose') {
-            const peso = parseFloat(document.getElementById('pedPeso').value);
-            const dose = parseFloat(document.getElementById('pedDose').value);
+            const peso = readField(document.getElementById('pedPeso'));
+            const dose = readField(document.getElementById('pedDose'));
             const maxInput = document.getElementById('pedDoseMax').value;
             const freq = parseInt(document.getElementById('pedFreq').value);
             labelText = 'Dose Pediátrica Calculada';
@@ -5320,8 +5301,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 subText = `Prescrição: ${fmtOneDec.format(perDose)} mg ${freqText}`;
             }
         } else if (val === 'pesoidade') {
-            const anos = parseFloat(document.getElementById('pedIdadeAnos').value) || 0;
-            const meses = parseFloat(document.getElementById('pedIdadeMeses').value) || 0;
+            const anos = readField(document.getElementById('pedIdadeAnos')) || 0;
+            const meses = readField(document.getElementById('pedIdadeMeses')) || 0;
             labelText = 'Estimativa de Peso Ideal';
             
             const totalMonths = anos * 12 + meses;
@@ -5338,7 +5319,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 subText = 'Fórmulas práticas (APLS) para uso emergencial.';
             }
         } else if (val === 'hidratacao') {
-            const peso = parseFloat(document.getElementById('pedHollidayPeso').value);
+            const peso = readField(document.getElementById('pedHollidayPeso'));
             labelText = 'Regra de Holliday-Segar';
             if (!isNaN(peso) && peso > 0) {
                 let ml = 0;
@@ -5425,8 +5406,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         } else if (val === 'ganho') {
-            const w = parseFloat(document.getElementById('obstPesoPreg').value);
-            const h = parseFloat(document.getElementById('obstAlturaPreg').value);
+            const w = readField(document.getElementById('obstPesoPreg'));
+            const h = readField(document.getElementById('obstAlturaPreg'));
             labelText = 'Ganho de Peso Recomendado';
             if (!isNaN(w) && !isNaN(h) && w > 0 && h > 0) {
                 const imc = w / Math.pow(h / 100, 2);
@@ -5468,7 +5449,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const labCalcType = document.getElementById('labCalcType');
         const labFromUnit = document.getElementById('labFromUnit');
         if (!labCalcType || !labFromUnit) return;
-        const val = parseFloat(document.getElementById('labValue').value);
+        const val = readField(document.getElementById('labValue'));
         const type = labCalcType.value;
         const unit = labFromUnit.value;
         const card = document.getElementById('labResultCard');
@@ -6211,8 +6192,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         ]}
                     ],
                     calc: (vals) => {
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const P = parseFloat(vals.eng_P) || 0;
+                        const L = Number(vals.eng_L);
+                        const P = Number(vals.eng_P);
                         const tipo = vals.eng_tipo;
                         let maxM = 0;
                         if (tipo === 'conc') {
@@ -6234,7 +6215,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_P", label: "Carga Total P (kN)", default: "10" }
                     ],
                     calc: (vals) => {
-                        const P = parseFloat(vals.eng_P) || 0;
+                        const P = Number(vals.eng_P);
                         return { label: "Corte Máximo Vmax", value: P / 2, unit: "kN" };
                     }
                 },
@@ -6250,10 +6231,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_I", label: "Inércia I (cm⁴)", default: "1000" }
                     ],
                     calc: (vals) => {
-                        const P = parseFloat(vals.eng_P) || 0;
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const E = parseFloat(vals.eng_E) || 0;
-                        const I = parseFloat(vals.eng_I) || 0;
+                        const P = Number(vals.eng_P);
+                        const L = Number(vals.eng_L);
+                        const E = Number(vals.eng_E);
+                        const I = Number(vals.eng_I);
                         if (E === 0 || I === 0) return { error: "Divisão por zero!" };
                         // Conversão: P[kN], L[m], E[GPa=10⁶kN/m²], I[cm⁴=10⁻⁸m⁴]
                         // E·I[kN·m²] = E×10⁶ × I×10⁻⁸ = E·I×10⁻²
@@ -6274,9 +6255,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_I", label: "Inércia I (cm⁴)", default: "5000" }
                     ],
                     calc: (vals) => {
-                        const M = parseFloat(vals.eng_M) || 0;
-                        const y = parseFloat(vals.eng_y) || 0;
-                        const I = parseFloat(vals.eng_I) || 0;
+                        const M = Number(vals.eng_M);
+                        const y = Number(vals.eng_y);
+                        const I = Number(vals.eng_I);
                         if (I === 0) return { error: "Divisão por zero!" };
                         const stress = (1000 * M * y) / I;
                         return { label: "Tensão Máxima σ", value: stress, unit: "MPa" };
@@ -6293,9 +6274,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_h", label: "Altura h (cm)", default: "30" }
                     ],
                     calc: (vals) => {
-                        const V = parseFloat(vals.eng_V) || 0;
-                        const b = parseFloat(vals.eng_b) || 0;
-                        const h = parseFloat(vals.eng_h) || 0;
+                        const V = Number(vals.eng_V);
+                        const b = Number(vals.eng_b);
+                        const h = Number(vals.eng_h);
                         if (b === 0 || h === 0) return { error: "Dimensões zeradas!" };
                         const stress = (15 * V) / (b * h);
                         return { label: "Tensão Cisalhante τ", value: stress, unit: "MPa" };
@@ -6313,10 +6294,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_K", label: "Fator K (0,5 a 2,0)", default: "1" }
                     ],
                     calc: (vals) => {
-                        const E = parseFloat(vals.eng_E) || 0;
-                        const I = parseFloat(vals.eng_I) || 0;
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const K = parseFloat(vals.eng_K) || 1;
+                        const E = Number(vals.eng_E);
+                        const I = Number(vals.eng_I);
+                        const L = Number(vals.eng_L);
+                        const K = Number(vals.eng_K);
                         if (K === 0 || L === 0) return { error: "Comprimento/K zerados!" };
                         const P_cr = (Math.PI * Math.PI * E * I) / (100 * Math.pow(K * L, 2));
                         return { label: "Carga Crítica Pcr", value: P_cr, unit: "kN" };
@@ -6332,8 +6313,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_h", label: "Altura h (cm)", default: "20" }
                     ],
                     calc: (vals) => {
-                        const b = parseFloat(vals.eng_b) || 0;
-                        const h = parseFloat(vals.eng_h) || 0;
+                        const b = Number(vals.eng_b);
+                        const h = Number(vals.eng_h);
                         return { label: "Centroide (X̄, Ȳ)", value: `${(b/2).toFixed(2)}, ${(h/2).toFixed(2)}`, unit: "cm" };
                     }
                 },
@@ -6347,8 +6328,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_h", label: "Altura h (cm)", default: "20" }
                     ],
                     calc: (vals) => {
-                        const b = parseFloat(vals.eng_b) || 0;
-                        const h = parseFloat(vals.eng_h) || 0;
+                        const b = Number(vals.eng_b);
+                        const h = Number(vals.eng_h);
                         const Ix = (b * Math.pow(h, 3)) / 12;
                         return { label: "Inércia Ix", value: Ix, unit: "cm⁴" };
                     }
@@ -6370,10 +6351,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_v", label: "Velocidade v (m/s)", default: "2" }
                     ],
                     calc: (vals) => {
-                        const f = parseFloat(vals.eng_f) || 0;
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const D = parseFloat(vals.eng_D) || 0;
-                        const v = parseFloat(vals.eng_v) || 0;
+                        const f = Number(vals.eng_f);
+                        const L = Number(vals.eng_L);
+                        const D = Number(vals.eng_D);
+                        const v = Number(vals.eng_v);
                         if (D === 0) return { error: "Diâmetro zerado!" };
                         const hf = (1000 * f * L * v * v) / (19.62 * D);
                         return { label: "Perda hf", value: hf, unit: "m" };
@@ -6391,10 +6372,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_A", label: "Área A (m²)", default: "2" }
                     ],
                     calc: (vals) => {
-                        const Rh = parseFloat(vals.eng_Rh) || 0;
-                        const S = parseFloat(vals.eng_S) || 0;
-                        const n = parseFloat(vals.eng_n) || 0.013;
-                        const A = parseFloat(vals.eng_A) || 0;
+                        const Rh = Number(vals.eng_Rh);
+                        const S = Number(vals.eng_S);
+                        const n = Number(vals.eng_n);
+                        const A = Number(vals.eng_A);
                         if (n === 0) return { error: "Manning n zerado!" };
                         const Q = (1 / n) * A * Math.pow(Rh, 2/3) * Math.sqrt(S);
                         return { label: "Vazão Q", value: Q, unit: "m³/s" };
@@ -6411,9 +6392,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_nu", label: "Viscosidade (10⁻⁶ m²/s)", default: "1" }
                     ],
                     calc: (vals) => {
-                        const v = parseFloat(vals.eng_v) || 0;
-                        const D = parseFloat(vals.eng_D) || 0;
-                        const nu = parseFloat(vals.eng_nu) || 1;
+                        const v = Number(vals.eng_v);
+                        const D = Number(vals.eng_D);
+                        const nu = Number(vals.eng_nu);
                         if (nu === 0) return { error: "Viscosidade zerada!" };
                         const Re = (v * D) / (nu * 1e-6);
                         return { label: "Reynolds Re", value: Re, unit: "" };
@@ -6429,8 +6410,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_h", label: "Altura Coluna h (m)", default: "10" }
                     ],
                     calc: (vals) => {
-                        const rho = parseFloat(vals.eng_rho) || 0;
-                        const h = parseFloat(vals.eng_h) || 0;
+                        const rho = Number(vals.eng_rho);
+                        const h = Number(vals.eng_h);
                         const P = (rho * 9.80665 * h) / 1000;
                         return { label: "Pressão P", value: P, unit: "kPa" };
                     }
@@ -6442,8 +6423,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_v", label: "Velocidade v (m/s)", default: "2" }
                     ],
                     calc: (vals) => {
-                        const D = parseFloat(vals.eng_D) || 0;
-                        const v = parseFloat(vals.eng_v) || 0;
+                        const D = Number(vals.eng_D);
+                        const v = Number(vals.eng_v);
                         const Q = (Math.PI * D * D * v) / 4000;
                         return { label: "Vazão Q", value: Q, unit: "L/s" };
                     }
@@ -6456,9 +6437,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_eta", label: "Rendimento η (%)", default: "75" }
                     ],
                     calc: (vals) => {
-                        const Q = parseFloat(vals.eng_Q) || 0;
-                        const H = parseFloat(vals.eng_H) || 0;
-                        const eta = parseFloat(vals.eng_eta) || 75;
+                        const Q = Number(vals.eng_Q);
+                        const H = Number(vals.eng_H);
+                        const eta = Number(vals.eng_eta);
                         if (eta === 0) return { error: "Rendimento zerado!" };
                         const Pot = (0.981 * Q * H) / eta;
                         return { label: "Potência Bomba", value: Pot, unit: "kW" };
@@ -6471,8 +6452,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_D", label: "Diâmetro D (mm)", default: "80" }
                     ],
                     calc: (vals) => {
-                        const Q = parseFloat(vals.eng_Q) || 0;
-                        const D = parseFloat(vals.eng_D) || 0;
+                        const Q = Number(vals.eng_Q);
+                        const D = Number(vals.eng_D);
                         if (D === 0) return { error: "Diâmetro zerado!" };
                         const v = (353.68 * Q) / (D * D);
                         return { label: "Velocidade v", value: v, unit: "m/s" };
@@ -6491,9 +6472,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_j", label: "Espessura Junta (mm)", default: "10" }
                     ],
                     calc: (vals) => {
-                        const c = parseFloat(vals.eng_c) || 0;
-                        const a = parseFloat(vals.eng_a) || 0;
-                        const j = parseFloat(vals.eng_j) || 0;
+                        const c = Number(vals.eng_c);
+                        const a = Number(vals.eng_a);
+                        const j = Number(vals.eng_j);
                         const sum_c = c + (j * 0.1);
                         const sum_a = a + (j * 0.1);
                         if (sum_c === 0 || sum_a === 0) return { error: "Dimensões inválidas!" };
@@ -6509,9 +6490,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_E", label: "Espessura (cm)", default: "10" }
                     ],
                     calc: (vals) => {
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const C = parseFloat(vals.eng_C) || 0;
-                        const E = parseFloat(vals.eng_E) || 0;
+                        const L = Number(vals.eng_L);
+                        const C = Number(vals.eng_C);
+                        const E = Number(vals.eng_E);
                         const Vol = L * C * (E * 0.01);
                         return { label: "Volume Total", value: Vol, unit: "m³" };
                     }
@@ -6522,7 +6503,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_V", label: "Volume de Concreto (m³)", default: "1" }
                     ],
                     calc: (vals) => {
-                        const V = parseFloat(vals.eng_V) || 0;
+                        const V = Number(vals.eng_V);
                         const cimento = V * 350;
                         const areia = V * 0.52;
                         const brita = V * 0.62;
@@ -6542,9 +6523,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_d", label: "Altura útil d (cm)", default: "35" }
                     ],
                     calc: (vals) => {
-                        const As = parseFloat(vals.eng_As) || 0;
-                        const b = parseFloat(vals.eng_b) || 0;
-                        const d = parseFloat(vals.eng_d) || 0;
+                        const As = Number(vals.eng_As);
+                        const b = Number(vals.eng_b);
+                        const d = Number(vals.eng_d);
                         if (b === 0 || d === 0) return { error: "Dimensões zeradas!" };
                         const rho = (As / (b * d)) * 100;
                         return { label: "Taxa de Aço ρ", value: rho, unit: "%" };
@@ -6557,8 +6538,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_H", label: "Altura Cumeeira H (m)", default: "2.4" }
                     ],
                     calc: (vals) => {
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const H = parseFloat(vals.eng_H) || 0;
+                        const L = Number(vals.eng_L);
+                        const H = Number(vals.eng_H);
                         if (L === 0) return { error: "Vão zerado!" };
                         const inc = (H / (L / 2)) * 100;
                         return { label: "Inclinação I", value: inc, unit: "%" };
@@ -6571,8 +6552,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_A", label: "Área Realizada (m²)", default: "50" }
                     ],
                     calc: (vals) => {
-                        const HH = parseFloat(vals.eng_HH) || 0;
-                        const A = parseFloat(vals.eng_A) || 0;
+                        const HH = Number(vals.eng_HH);
+                        const A = Number(vals.eng_A);
                         if (A === 0) return { error: "Área zerada!" };
                         const RUP = HH / A;
                         return { label: "Produtividade RUP", value: RUP, unit: "HH/m²" };
@@ -6587,10 +6568,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_h", label: "Profundidade (m)", default: "1.2" }
                     ],
                     calc: (vals) => {
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const b1 = parseFloat(vals.eng_b1) || 0;
-                        const b2 = parseFloat(vals.eng_b2) || 0;
-                        const h = parseFloat(vals.eng_h) || 0;
+                        const L = Number(vals.eng_L);
+                        const b1 = Number(vals.eng_b1);
+                        const b2 = Number(vals.eng_b2);
+                        const h = Number(vals.eng_h);
                         const Vol = L * ((b1 + b2) / 2) * h;
                         return { label: "Volume Escavado", value: Vol, unit: "m³" };
                     }
@@ -6616,8 +6597,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     ],
                     calc: (vals) => {
                         const modo = vals.eng_modo;
-                        const val1 = parseFloat(vals.eng_val1) || 0;
-                        const val2 = parseFloat(vals.eng_val2) || 0;
+                        const val1 = Number(vals.eng_val1);
+                        const val2 = Number(vals.eng_val2);
                         if (modo === 'v') {
                             return { label: "Tensão V", value: val1 * val2, unit: "V" };
                         } else if (modo === 'i') {
@@ -6640,9 +6621,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_FP", label: "Fator Potência FP", default: "0.92" }
                     ],
                     calc: (vals) => {
-                        const V = parseFloat(vals.eng_V) || 0;
-                        const I = parseFloat(vals.eng_I) || 0;
-                        const FP = parseFloat(vals.eng_FP) || 1;
+                        const V = Number(vals.eng_V);
+                        const I = Number(vals.eng_I);
+                        const FP = Number(vals.eng_FP);
                         const P = V * I * FP;
                         return { label: "Potência Ativa P", value: P / 1000, unit: "kW" };
                     }
@@ -6658,9 +6639,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_FP", label: "Fator Potência FP", default: "0.85" }
                     ],
                     calc: (vals) => {
-                        const V = parseFloat(vals.eng_V) || 0;
-                        const I = parseFloat(vals.eng_I) || 0;
-                        const FP = parseFloat(vals.eng_FP) || 1;
+                        const V = Number(vals.eng_V);
+                        const I = Number(vals.eng_I);
+                        const FP = Number(vals.eng_FP);
                         const P = Math.sqrt(3) * V * I * FP;
                         return { label: "Potência Ativa P", value: P / 1000, unit: "kW" };
                     }
@@ -6676,9 +6657,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_S", label: "Seção Cabo (mm²)", default: "4" }
                     ],
                     calc: (vals) => {
-                        const I = parseFloat(vals.eng_I) || 0;
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const S = parseFloat(vals.eng_S) || 4;
+                        const I = Number(vals.eng_I);
+                        const L = Number(vals.eng_L);
+                        const S = Number(vals.eng_S);
                         if (S === 0) return { error: "Seção zerada!" };
                         const dV = (2 * 0.0172 * L * I) / S;
                         return { label: "Queda de Tensão ΔV", value: dV, unit: "V" };
@@ -6695,9 +6676,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_FP", label: "Fator Potência FP", default: "0.9" }
                     ],
                     calc: (vals) => {
-                        const P = parseFloat(vals.eng_P) || 0;
-                        const V = parseFloat(vals.eng_V) || 0;
-                        const FP = parseFloat(vals.eng_FP) || 1;
+                        const P = Number(vals.eng_P);
+                        const V = Number(vals.eng_V);
+                        const FP = Number(vals.eng_FP);
                         if (V === 0 || FP === 0) return { error: "Parâmetros inválidos!" };
                         const I = P / (V * FP);
                         return { label: "Corrente Projeto I", value: I, unit: "A" };
@@ -6715,10 +6696,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_f", label: "Frequência f (Hz)", default: "60" }
                     ],
                     calc: (vals) => {
-                        const R = parseFloat(vals.eng_R) || 0;
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const C = parseFloat(vals.eng_C) || 1;
-                        const f = parseFloat(vals.eng_f) || 60;
+                        const R = Number(vals.eng_R);
+                        const L = Number(vals.eng_L);
+                        const C = Number(vals.eng_C);
+                        const f = Number(vals.eng_f);
                         if (f === 0 || C === 0) return { error: "Parâmetros inválidos!" };
                         const XL = 2 * Math.PI * f * (L * 1e-3);
                         const XC = 1 / (2 * Math.PI * f * (C * 1e-6));
@@ -6736,8 +6717,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_C", label: "Capacitância C (μF)", default: "100" }
                     ],
                     calc: (vals) => {
-                        const L = parseFloat(vals.eng_L) || 0;
-                        const C = parseFloat(vals.eng_C) || 0;
+                        const L = Number(vals.eng_L);
+                        const C = Number(vals.eng_C);
                         if (L === 0 || C === 0) return { error: "L ou C zerados!" };
                         const fr = 1 / (2 * Math.PI * Math.sqrt((L * 1e-3) * (C * 1e-6)));
                         return { label: "Frequência fr", value: fr, unit: "Hz" };
@@ -6759,9 +6740,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_Id", label: "Corrente LED Id (mA)", default: "20" }
                     ],
                     calc: (vals) => {
-                        const Vcc = parseFloat(vals.eng_Vcc) || 0;
-                        const Vd = parseFloat(vals.eng_Vd) || 0;
-                        const Id = parseFloat(vals.eng_Id) || 20;
+                        const Vcc = Number(vals.eng_Vcc);
+                        const Vd = Number(vals.eng_Vd);
+                        const Id = Number(vals.eng_Id);
                         if (Id === 0) return { error: "Corrente zerada!" };
                         const R = (1000 * (Vcc - Vd)) / Id;
                         return { label: "Resistência R", value: R, unit: "Ω" };
@@ -6777,8 +6758,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_C", label: "Capacitância C (μF)", default: "0.1" }
                     ],
                     calc: (vals) => {
-                        const R = parseFloat(vals.eng_R) || 0;
-                        const C = parseFloat(vals.eng_C) || 0;
+                        const R = Number(vals.eng_R);
+                        const C = Number(vals.eng_C);
                         if (R === 0 || C === 0) return { error: "R ou C zerados!" };
                         const fc = 1000 / (2 * Math.PI * R * C);
                         return { label: "Corte fc", value: fc, unit: "Hz" };
@@ -6795,9 +6776,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_R2", label: "Resistor R2 (kΩ)", default: "2" }
                     ],
                     calc: (vals) => {
-                        const Vin = parseFloat(vals.eng_Vin) || 0;
-                        const R1 = parseFloat(vals.eng_R1) || 0;
-                        const R2 = parseFloat(vals.eng_R2) || 0;
+                        const Vin = Number(vals.eng_Vin);
+                        const R1 = Number(vals.eng_R1);
+                        const R2 = Number(vals.eng_R2);
                         if (R1 + R2 === 0) return { error: "Soma resistências zerada!" };
                         const Vout = Vin * (R2 / (R1 + R2));
                         return { label: "Tensão Saída Vout", value: Vout, unit: "V" };
@@ -6814,9 +6795,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_C", label: "Capacitância C (μF)", default: "10" }
                     ],
                     calc: (vals) => {
-                        const R1 = parseFloat(vals.eng_R1) || 0;
-                        const R2 = parseFloat(vals.eng_R2) || 0;
-                        const C = parseFloat(vals.eng_C) || 0;
+                        const R1 = Number(vals.eng_R1);
+                        const R2 = Number(vals.eng_R2);
+                        const C = Number(vals.eng_C);
                         if (C === 0 || (R1 + 2*R2) === 0) return { error: "Parâmetros inválidos!" };
                         const f = 1440 / ((R1 + 2*R2) * C);
                         return { label: "Frequência f", value: f, unit: "Hz" };
@@ -6832,8 +6813,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_Rin", label: "Resistência Entrada Rin (kΩ)", default: "1" }
                     ],
                     calc: (vals) => {
-                        const Rf = parseFloat(vals.eng_Rf) || 0;
-                        const Rin = parseFloat(vals.eng_Rin) || 1;
+                        const Rf = Number(vals.eng_Rf);
+                        const Rin = Number(vals.eng_Rin);
                         if (Rin === 0) return { error: "Rin zerado!" };
                         const Av = 1 + (Rf / Rin);
                         return { label: "Ganho Tensão Av", value: Av, unit: "" };
@@ -6883,7 +6864,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_db", label: "Ganho dB", default: "20" }
                     ],
                     calc: (vals) => {
-                        const db = parseFloat(vals.eng_db) || 0;
+                        const db = Number(vals.eng_db);
                         const ratio = Math.pow(10, db / 10);
                         return { label: "Razão de Potência", value: ratio, unit: "x" };
                     }
@@ -6903,8 +6884,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_d", label: "Braço d (m)", default: "0.5" }
                     ],
                     calc: (vals) => {
-                        const F = parseFloat(vals.eng_F) || 0;
-                        const d = parseFloat(vals.eng_d) || 0;
+                        const F = Number(vals.eng_F);
+                        const d = Number(vals.eng_d);
                         return { label: "Torque T", value: F * d, unit: "N·m" };
                     }
                 },
@@ -6919,9 +6900,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_J", label: "Inércia Polar J (cm⁴)", default: "50" }
                     ],
                     calc: (vals) => {
-                        const T = parseFloat(vals.eng_T) || 0;
-                        const r = parseFloat(vals.eng_r) || 0;
-                        const J = parseFloat(vals.eng_J) || 0;
+                        const T = Number(vals.eng_T);
+                        const r = Number(vals.eng_r);
+                        const J = Number(vals.eng_J);
                         if (J === 0) return { error: "Inércia polar zerada!" };
                         // Conversão: T[N·m]×1000=[N·mm], r[mm], J[cm⁴]×10000=[mm⁴]
                         // τ[MPa] = T[N·mm]·r[mm] / J[mm⁴] = (T×1000)·r / (J×10000)
@@ -6940,8 +6921,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_N", label: "Velocidade N (RPM)", default: "3000" }
                     ],
                     calc: (vals) => {
-                        const T = parseFloat(vals.eng_T) || 0;
-                        const N = parseFloat(vals.eng_N) || 0;
+                        const T = Number(vals.eng_T);
+                        const N = Number(vals.eng_N);
                         const Pot = (T * 2 * Math.PI * N) / 60000;
                         return { label: "Potência Motor", value: Pot, unit: "kW" };
                     }
@@ -6956,8 +6937,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_Z2", label: "Dentes Conduzida Z2", default: "40" }
                     ],
                     calc: (vals) => {
-                        const Z1 = parseFloat(vals.eng_Z1) || 1;
-                        const Z2 = parseFloat(vals.eng_Z2) || 1;
+                        const Z1 = Number(vals.eng_Z1);
+                        const Z2 = Number(vals.eng_Z2);
                         if (Z1 === 0) return { error: "Z1 zerada!" };
                         return { label: "Relação i", value: Z2 / Z1, unit: ":1" };
                     }
@@ -6972,8 +6953,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_D", label: "Diâmetro Cilindro D (mm)", default: "40" }
                     ],
                     calc: (vals) => {
-                        const F = parseFloat(vals.eng_F) || 0;
-                        const D = parseFloat(vals.eng_D) || 0;
+                        const F = Number(vals.eng_F);
+                        const D = Number(vals.eng_D);
                         if (D === 0) return { error: "Diâmetro zerado!" };
                         const P = (4000 * F) / (Math.PI * D * D);
                         return { label: "Pressão Interna P", value: P, unit: "kPa" };
@@ -6990,9 +6971,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_dT", label: "Variação Temp. ΔT (°C)", default: "40" }
                     ],
                     calc: (vals) => {
-                        const L0 = parseFloat(vals.eng_L0) || 0;
-                        const alpha = parseFloat(vals.eng_alpha) || 0;
-                        const dT = parseFloat(vals.eng_dT) || 0;
+                        const L0 = Number(vals.eng_L0);
+                        const alpha = Number(vals.eng_alpha);
+                        const dT = Number(vals.eng_dT);
                         const dL = L0 * alpha * dT * 0.001;
                         return { label: "Variação Comp. ΔL", value: dL, unit: "mm" };
                     }
@@ -7006,7 +6987,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_D", label: "Diâmetro Eixo D (mm)", default: "50" }
                     ],
                     calc: (vals) => {
-                        const D = parseFloat(vals.eng_D) || 0;
+                        const D = Number(vals.eng_D);
                         const J = (Math.PI * Math.pow(D * 0.1, 4)) / 32;
                         return { label: "Momento Polar J", value: J, unit: "cm⁴" };
                     }
@@ -7024,9 +7005,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_T", label: "Temperatura T (°C)", default: "0" }
                     ],
                     calc: (vals) => {
-                        const P = parseFloat(vals.eng_P) || 0;
-                        const V = parseFloat(vals.eng_V) || 0;
-                        const T = parseFloat(vals.eng_T) || 0;
+                        const P = Number(vals.eng_P);
+                        const V = Number(vals.eng_V);
+                        const T = Number(vals.eng_T);
                         const absT = T + 273.15;
                         if (absT === 0) return { error: "Zero absoluto!" };
                         const n = (P * V) / (0.08206 * absT);
@@ -7041,9 +7022,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_V", label: "Volume Total V (L)", default: "1" }
                     ],
                     calc: (vals) => {
-                        const m = parseFloat(vals.eng_m) || 0;
-                        const MM = parseFloat(vals.eng_MM) || 0;
-                        const V = parseFloat(vals.eng_V) || 0;
+                        const m = Number(vals.eng_m);
+                        const MM = Number(vals.eng_MM);
+                        const V = Number(vals.eng_V);
                         if (MM === 0 || V === 0) return { error: "MM ou Volume zerados!" };
                         const M = m / (MM * V);
                         return { label: "Molaridade M", value: M, unit: "mol/L" };
@@ -7057,9 +7038,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_C2", label: "Conc. Final C2", default: "0.1" }
                     ],
                     calc: (vals) => {
-                        const C1 = parseFloat(vals.eng_C1) || 0;
-                        const V1 = parseFloat(vals.eng_V1) || 0;
-                        const C2 = parseFloat(vals.eng_C2) || 0;
+                        const C1 = Number(vals.eng_C1);
+                        const V1 = Number(vals.eng_V1);
+                        const C2 = Number(vals.eng_C2);
                         if (C2 === 0) return { error: "C2 zerada!" };
                         const V2 = (C1 * V1) / C2;
                         return { label: "Volume Final V2", value: V2, unit: "L" };
@@ -7071,7 +7052,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_H", label: "Concentração [H+] (mol/L)", default: "0.001" }
                     ],
                     calc: (vals) => {
-                        const H = parseFloat(vals.eng_H) || 0;
+                        const H = Number(vals.eng_H);
                         if (H <= 0) return { error: "[H+] inválido!" };
                         const phVal = -Math.log10(H);
                         return { label: "Potencial Hidrog. pH", value: phVal, unit: "" };
@@ -7085,9 +7066,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_dT", label: "Variação Temp. ΔT (°C)", default: "15" }
                     ],
                     calc: (vals) => {
-                        const m = parseFloat(vals.eng_m) || 0;
-                        const c = parseFloat(vals.eng_c) || 0;
-                        const dT = parseFloat(vals.eng_dT) || 0;
+                        const m = Number(vals.eng_m);
+                        const c = Number(vals.eng_c);
+                        const dT = Number(vals.eng_dT);
                         const Q = m * c * dT;
                         return { label: "Calor Trocado Q", value: Q / 1000, unit: "kJ" };
                     }
@@ -7100,9 +7081,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_T", label: "Temperatura T (°C)", default: "25" }
                     ],
                     calc: (vals) => {
-                        const A = parseFloat(vals.eng_A) || 0;
-                        const Ea = parseFloat(vals.eng_Ea) || 0;
-                        const T = parseFloat(vals.eng_T) || 0;
+                        const A = Number(vals.eng_A);
+                        const Ea = Number(vals.eng_Ea);
+                        const T = Number(vals.eng_T);
                         const R_const = 8.314;
                         const absT = T + 273.15;
                         if (absT === 0) return { error: "Zero absoluto!" };
@@ -7118,9 +7099,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_coefB", label: "Coeficiente B", default: "2" }
                     ],
                     calc: (vals) => {
-                        const molA = parseFloat(vals.eng_molA) || 0;
-                        const coefA = parseFloat(vals.eng_coefA) || 1;
-                        const coefB = parseFloat(vals.eng_coefB) || 1;
+                        const molA = Number(vals.eng_molA);
+                        const coefA = Number(vals.eng_coefA);
+                        const coefB = Number(vals.eng_coefB);
                         if (coefA === 0) return { error: "Coef. A zerado!" };
                         const molB = molA * (coefB / coefA);
                         return { label: "Mols Necessários B", value: molB, unit: "mol" };
@@ -7138,8 +7119,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_Q", label: "Qtd Produzida", default: "1000" }
                     ],
                     calc: (vals) => {
-                        const T = parseFloat(vals.eng_T) || 0;
-                        const Q = parseFloat(vals.eng_Q) || 1;
+                        const T = Number(vals.eng_T);
+                        const Q = Number(vals.eng_Q);
                         if (Q === 0) return { error: "Quantidade zerada!" };
                         const tc = (T * 3600) / Q;
                         return { label: "Tempo de Ciclo TC", value: tc, unit: "s/unid" };
@@ -7153,9 +7134,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_qual", label: "Qualidade (%)", default: "98" }
                     ],
                     calc: (vals) => {
-                        const disp = parseFloat(vals.eng_disp) || 0;
-                        const perf = parseFloat(vals.eng_perf) || 0;
-                        const qual = parseFloat(vals.eng_qual) || 0;
+                        const disp = Number(vals.eng_disp);
+                        const perf = Number(vals.eng_perf);
+                        const qual = Number(vals.eng_qual);
                         const oee = (disp * perf * qual) / 10000;
                         return { label: "Eficiência OEE", value: oee, unit: "%" };
                     }
@@ -7168,9 +7149,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_H", label: "Custo Estocagem H ($/un)", default: "5" }
                     ],
                     calc: (vals) => {
-                        const D = parseFloat(vals.eng_D) || 0;
-                        const S = parseFloat(vals.eng_S) || 0;
-                        const H = parseFloat(vals.eng_H) || 1;
+                        const D = Number(vals.eng_D);
+                        const S = Number(vals.eng_S);
+                        const H = Number(vals.eng_H);
                         if (H === 0) return { error: "Custo estocagem zerado!" };
                         const lec = Math.sqrt((2 * D * S) / H);
                         return { label: "Lote Econômico LEC", value: lec, unit: "unid" };
@@ -7183,8 +7164,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_tg", label: "Gargalo Unitário (s)", default: "45" }
                     ],
                     calc: (vals) => {
-                        const T = parseFloat(vals.eng_T) || 0;
-                        const tg = parseFloat(vals.eng_tg) || 1;
+                        const T = Number(vals.eng_T);
+                        const tg = Number(vals.eng_tg);
                         if (tg === 0) return { error: "Tempo gargalo zerado!" };
                         const cap = (T * 60) / tg;
                         return { label: "Capacidade Produção", value: cap, unit: "unid" };
@@ -7197,8 +7178,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_total", label: "Total Produzido", default: "25000" }
                     ],
                     calc: (vals) => {
-                        const def = parseFloat(vals.eng_def) || 0;
-                        const total = parseFloat(vals.eng_total) || 1;
+                        const def = Number(vals.eng_def);
+                        const total = Number(vals.eng_total);
                         if (total === 0) return { error: "Total zerado!" };
                         const ppm = (def / total) * 1e6;
                         return { label: "Defeitos", value: ppm, unit: "PPM" };
@@ -7212,9 +7193,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_mat", label: "Custo Materiais ($)", default: "5000" }
                     ],
                     calc: (vals) => {
-                        const fat = parseFloat(vals.eng_fat) || 0;
-                        const mo = parseFloat(vals.eng_mo) || 0;
-                        const mat = parseFloat(vals.eng_mat) || 0;
+                        const fat = Number(vals.eng_fat);
+                        const mo = Number(vals.eng_mo);
+                        const mat = Number(vals.eng_mat);
                         const den = mo + mat;
                         if (den === 0) return { error: "Custos zerados!" };
                         const prod = fat / den;
@@ -7228,8 +7209,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         { id: "eng_est", label: "Estoque Médio ($)", default: "15000" }
                     ],
                     calc: (vals) => {
-                        const cogs = parseFloat(vals.eng_cogs) || 0;
-                        const est = parseFloat(vals.eng_est) || 1;
+                        const cogs = Number(vals.eng_cogs);
+                        const est = Number(vals.eng_est);
                         if (est === 0) return { error: "Estoque médio zerado!" };
                         const giro = cogs / est;
                         return { label: "Giro Anual", value: giro, unit: "giros/ano" };
@@ -7356,6 +7337,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const label = document.createElement('label');
             label.className = 'panel-label';
             label.innerText = f.label;
+            label.htmlFor=f.id;
             row.appendChild(label);
 
             if (f.type === 'select') {
@@ -7378,7 +7360,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 input.type = 'text';
                 input.className = 'panel-input';
                 input.id = f.id;
-                input.value = f.default || '';
+                input.value = f.default!==undefined?String(f.default).replace('.',numberFormat==='BR'?',':'.'):'';
+                input.inputMode='decimal';
                 input.style.padding = '5px 8px';
                 input.style.fontSize = '11px';
 
@@ -7421,11 +7404,17 @@ document.addEventListener('DOMContentLoaded', () => {
         calcObj.fields.forEach(f => {
             const el = document.getElementById(f.id);
             if (el) {
-                vals[f.id] = el.value;
+                if(f.type==='select') vals[f.id]=el.value;
+                else {const value=readField(el);el.setAttribute('aria-invalid',String(!Number.isFinite(value)));vals[f.id]=value;}
             }
         });
 
-        const result = calcObj.calc(vals);
+        if(calcObj.fields.some(f=>f.type!=='select'&&!Number.isFinite(vals[f.id]))) {displayResult.innerText='Preencha todos os campos com números válidos no formato selecionado.';return;}
+        const positive=['eng_L','eng_E','eng_I','eng_D','eng_S','eng_n','eng_nu'];
+        if(positive.some(key=>key in vals&&vals[key]<=0)||('eng_FP' in vals&&(vals.eng_FP<=0||vals.eng_FP>1))||('eng_eta' in vals&&(vals.eng_eta<=0||vals.eng_eta>100))){displayResult.innerText='Confira as dimensões positivas, o fator de potência (0 a 1) e o rendimento (0 a 100%).';return;}
+        let result;
+        try{result=calcObj.calc(vals);}catch(error){displayResult.innerText='Não foi possível calcular com esses parâmetros.';return;}
+        if(!result || typeof result.value==='number'&&!Number.isFinite(result.value))result={error:'Resultado indefinido. Confira os valores e os denominadores.'};
 
         if (result.error) {
             displayFormula.innerText = `${calcObj.name} (${engCalculations[cat].name})`;
@@ -7435,7 +7424,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         let valFormatted = result.value;
-        const numVal = parseFloat(result.value);
+        const numVal = readField(result);
         if (!isNaN(numVal) && isFinite(numVal) && String(numVal) === String(result.value)) {
             valFormatted = formatNumber(numVal);
         } else if (typeof result.value === 'number') {
@@ -7969,7 +7958,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         if (filtered.length === 0) {
-            container.innerHTML = `<div style="text-align: center; color: var(--text-muted); font-size: 11px; padding: 20px;">Nenhum guia encontrado para "${query}"</div>`;
+            const empty=document.createElement("p");empty.textContent=`Nenhum guia encontrado para "${query}"`;container.replaceChildren(empty);
             return;
         }
 
@@ -8080,31 +8069,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // === MÓDULO ENGINEERING AI ===
     // Sync with the shared keepai_token from the ecosystem
-    let sharedToken = localStorage.getItem('keepai_token');
-    let isGuestInit = localStorage.getItem('keep_ai_is_guest') === 'true';
+    let sharedToken = PowerCalcSafeStorage.getItem('keepai_token');
+    let isGuestInit = PowerCalcSafeStorage.getItem('keep_ai_is_guest') === 'true';
 
     if (sharedToken) {
         // User is logged in to the portal. Sync to powercalc if different.
-        if (localStorage.getItem('keep_ai_token') !== sharedToken || isGuestInit) {
-            localStorage.setItem('keep_ai_token', sharedToken);
-            localStorage.removeItem('keep_ai_is_guest');
+        if (PowerCalcSafeStorage.getItem('keep_ai_token') !== sharedToken || isGuestInit) {
+            PowerCalcSafeStorage.setItem('keep_ai_token', sharedToken);
+            PowerCalcSafeStorage.removeItem('keep_ai_is_guest');
             // Remove old email and credits so that syncAiBalance gets them fresh from auth.php
-            localStorage.removeItem('keep_ai_email');
-            localStorage.removeItem('keep_ai_credits');
+            PowerCalcSafeStorage.removeItem('keep_ai_email');
+            PowerCalcSafeStorage.removeItem('keep_ai_credits');
         }
     } else {
         // Portal has no token. If powercalc is logged in (not guest), log out of powercalc too.
-        if (localStorage.getItem('keep_ai_token') && !isGuestInit) {
-            localStorage.removeItem('keep_ai_token');
-            localStorage.removeItem('keep_ai_email');
-            localStorage.removeItem('keep_ai_credits');
-            localStorage.removeItem('keep_ai_is_guest');
+        if (PowerCalcSafeStorage.getItem('keep_ai_token') && !isGuestInit) {
+            PowerCalcSafeStorage.removeItem('keep_ai_token');
+            PowerCalcSafeStorage.removeItem('keep_ai_email');
+            PowerCalcSafeStorage.removeItem('keep_ai_credits');
+            PowerCalcSafeStorage.removeItem('keep_ai_is_guest');
         }
     }
 
-    let aiToken = localStorage.getItem('keep_ai_token') || '';
-    let aiEmail = localStorage.getItem('keep_ai_email') || '';
-    let aiCredits = parseInt(localStorage.getItem('keep_ai_credits') || '0');
+    let aiToken = PowerCalcSafeStorage.getItem('keep_ai_token') || '';
+    let aiEmail = PowerCalcSafeStorage.getItem('keep_ai_email') || '';
+    let aiCredits = parseInt(PowerCalcSafeStorage.getItem('keep_ai_credits') || '0');
     let pixPollingInterval = null;
     let prePaymentCredits = 0;
 
@@ -8115,7 +8104,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const mainInterface = document.getElementById('aiMainInterface');
         const btnBuyCredits = document.getElementById('btnAiBuyCredits');
 
-        const isGuest = localStorage.getItem('keep_ai_is_guest') === 'true';
+        const isGuest = PowerCalcSafeStorage.getItem('keep_ai_is_guest') === 'true';
 
         if (!aiToken) {
             if (balanceText) balanceText.innerText = '🪙 10 Créditos Grátis';
@@ -8151,8 +8140,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.success && data.user) {
                     aiCredits = data.user.credits;
                     aiEmail = data.user.email;
-                    localStorage.setItem('keep_ai_credits', aiCredits);
-                    localStorage.setItem('keep_ai_email', aiEmail);
+                    PowerCalcSafeStorage.setItem('keep_ai_credits', aiCredits);
+                    PowerCalcSafeStorage.setItem('keep_ai_email', aiEmail);
                     if (userDisplay) {
                         userDisplay.innerText = isGuest ? 'Visitante' : aiEmail;
                     }
@@ -8166,11 +8155,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 } else {
                     aiToken = '';
-                    localStorage.removeItem('keep_ai_token');
-                    localStorage.removeItem('keepai_token');
-                    localStorage.removeItem('keep_ai_is_guest');
-                    localStorage.removeItem('keep_ai_email');
-                    localStorage.removeItem('keep_ai_credits');
+                    PowerCalcSafeStorage.removeItem('keep_ai_token');
+                    PowerCalcSafeStorage.removeItem('keepai_token');
+                    PowerCalcSafeStorage.removeItem('keep_ai_is_guest');
+                    PowerCalcSafeStorage.removeItem('keep_ai_email');
+                    PowerCalcSafeStorage.removeItem('keep_ai_credits');
                     syncAiBalance();
                 }
             })
@@ -8356,10 +8345,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     aiToken = data.token;
                     aiEmail = email;
                     aiCredits = (data.user && data.user.credits) || 10;
-                    localStorage.setItem('keep_ai_token', aiToken);
-                    localStorage.setItem('keep_ai_email', aiEmail);
-                    localStorage.setItem('keep_ai_credits', aiCredits);
-                    localStorage.setItem('keep_ai_is_guest', 'true');
+                    PowerCalcSafeStorage.setItem('keep_ai_token', aiToken);
+                    PowerCalcSafeStorage.setItem('keep_ai_email', aiEmail);
+                    PowerCalcSafeStorage.setItem('keep_ai_credits', aiCredits);
+                    PowerCalcSafeStorage.setItem('keep_ai_is_guest', 'true');
                     return data.token;
                 }
                 throw new Error(data.error || "Failed to register guest");
@@ -8393,11 +8382,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         aiToken = data.token;
                         aiEmail = email;
                         aiCredits = (data.user && data.user.credits) || 0;
-                        localStorage.setItem('keep_ai_token', aiToken);
-                        localStorage.setItem('keepai_token', aiToken);
-                        localStorage.setItem('keep_ai_email', aiEmail);
-                        localStorage.setItem('keep_ai_credits', aiCredits);
-                        localStorage.removeItem('keep_ai_is_guest');
+                        PowerCalcSafeStorage.setItem('keep_ai_token', aiToken);
+                        PowerCalcSafeStorage.setItem('keepai_token', aiToken);
+                        PowerCalcSafeStorage.setItem('keep_ai_email', aiEmail);
+                        PowerCalcSafeStorage.setItem('keep_ai_credits', aiCredits);
+                        PowerCalcSafeStorage.removeItem('keep_ai_is_guest');
                         syncAiBalance();
                     } else {
                         alert(data.error || "E-mail ou senha incorretos.");
@@ -8439,11 +8428,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         aiToken = data.token;
                         aiEmail = email;
                         aiCredits = (data.user && data.user.credits) || 10;
-                        localStorage.setItem('keep_ai_token', aiToken);
-                        localStorage.setItem('keepai_token', aiToken);
-                        localStorage.setItem('keep_ai_email', aiEmail);
-                        localStorage.setItem('keep_ai_credits', aiCredits);
-                        localStorage.removeItem('keep_ai_is_guest');
+                        PowerCalcSafeStorage.setItem('keep_ai_token', aiToken);
+                        PowerCalcSafeStorage.setItem('keepai_token', aiToken);
+                        PowerCalcSafeStorage.setItem('keep_ai_email', aiEmail);
+                        PowerCalcSafeStorage.setItem('keep_ai_credits', aiCredits);
+                        PowerCalcSafeStorage.removeItem('keep_ai_is_guest');
                         alert("Conta criada com sucesso! Você ganhou 10 créditos de IA gratuitos.");
                         syncAiBalance();
                     } else {
@@ -8462,7 +8451,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Compra de Créditos (Pix)
         if (btnBuyCredits && pixContainer && mainInterface) {
             btnBuyCredits.addEventListener('click', () => {
-                const isGuest = localStorage.getItem('keep_ai_is_guest') === 'true';
+                const isGuest = PowerCalcSafeStorage.getItem('keep_ai_is_guest') === 'true';
                 if (!aiToken || isGuest) {
                     if (authContainer) {
                         const isHidden = authContainer.style.display === 'none' || authContainer.style.display === '';
@@ -8536,7 +8525,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (data.credits > prePaymentCredits) {
                                 stopPixPolling();
                                 aiCredits = data.credits;
-                                localStorage.setItem('keep_ai_credits', aiCredits);
+                                PowerCalcSafeStorage.setItem('keep_ai_credits', aiCredits);
                                 
                                 const balanceText = document.getElementById('aiBalanceText');
                                 if (balanceText) balanceText.innerText = `🪙 Saldo: ${aiCredits} créditos`;
@@ -8659,9 +8648,9 @@ Layout da resposta:
                         if (data.success && (data.text || data.response)) {
                             const aiTextResponse = data.text || data.response;
                             aiCredits = typeof data.credits_remaining !== 'undefined' ? data.credits_remaining : Math.max(0, aiCredits - 1);
-                            localStorage.setItem('keep_ai_credits', aiCredits);
+                            PowerCalcSafeStorage.setItem('keep_ai_credits', aiCredits);
                             
-                            const isGuest = localStorage.getItem('keep_ai_is_guest') === 'true';
+                            const isGuest = PowerCalcSafeStorage.getItem('keep_ai_is_guest') === 'true';
                             const balanceText = document.getElementById('aiBalanceText');
                             if (balanceText) {
                                 balanceText.innerText = isGuest 
@@ -8829,7 +8818,7 @@ Layout da resposta:
     function saveAiHistory(query, response) {
         let history = [];
         try {
-            history = JSON.parse(localStorage.getItem('keep_ai_history') || '[]');
+            history = JSON.parse(PowerCalcSafeStorage.getItem('keep_ai_history') || '[]');
         } catch(e) {}
 
         history = history.filter(item => item.query !== query);
@@ -8840,7 +8829,7 @@ Layout da resposta:
         });
 
         if (history.length > 5) history = history.slice(0, 5);
-        localStorage.setItem('keep_ai_history', JSON.stringify(history));
+        PowerCalcSafeStorage.setItem('keep_ai_history', JSON.stringify(history));
         
         const historyContent = document.getElementById('aiHistoryContent');
         if (historyContent && historyContent.style.display === 'block') {
@@ -8860,7 +8849,7 @@ Layout da resposta:
         
         let history = [];
         try {
-            history = JSON.parse(localStorage.getItem('keep_ai_history') || '[]');
+            history = JSON.parse(PowerCalcSafeStorage.getItem('keep_ai_history') || '[]');
         } catch(e) {}
 
         if (history.length === 0) {
